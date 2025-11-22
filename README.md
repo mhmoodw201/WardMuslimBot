@@ -1,1 +1,1 @@
-"# WardMuslimBot" 
+"#WardMuslimBot" 
