@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sqlite3
 import requests
+import os
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from telegram.ext import (
     ChatMemberHandler
 )
 from telegram.constants import ChatMemberStatus
+from telegram.ext import Application
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -113,6 +115,21 @@ class Database:
         self.conn.commit()
 
 db = Database()
+
+
+
+# ===================================================================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+APP_URL = "https://wardmuslimbot.onrender.com"  # انسخه لاحقاً من Render
+
+app = Application.builder().token(BOT_TOKEN).build()
+app.run_webhook(
+    listen="0.0.0.0",
+    port=10000,
+    url_path=BOT_TOKEN,
+    webhook_url=f"{APP_URL}/{BOT_TOKEN}"
+)
 
 # ======================== API التقويم الهجري ========================
 class IslamicCalendar:
