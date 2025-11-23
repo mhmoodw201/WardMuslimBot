@@ -200,6 +200,18 @@ class IslamicCalendar:
     def is_day_before_white_days():
         hijri = IslamicCalendar.get_hijri_date()
         return hijri and hijri['day'] == 12
+    
+
+# ====== إعداد المتغيرات من البيئة ======
+BOT_TOKEN = os.getenv("8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI")  # ضع التوكن في Render environment
+APP_URL = os.getenv("https://wardmuslimbot.onrender.com")      # مثال: https://your-service.onrender.com
+PORT = int(os.getenv("PORT", "10000"))  # Render يزوّد PORT تلقائياً لكن 10000 كقيمة احتياطية
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN غير مُعرّف في متغيرات البيئة")
+
+# لا تنشئ Application هنا — سننشئها داخل main() بعد إضافة handlers وتهيئة المهام.
+
 
 # ======================== محتوى الأذكار ========================
 class IslamicContent:
@@ -963,18 +975,34 @@ def main():
     application.add_handler(ChatMemberHandler(track_bot_added, ChatMemberHandler.MY_CHAT_MEMBER))
     
     application.post_init = post_init
-    setup_jobs(application)
+    #setup_jobs(application)
     
     print("\n🚀 البوت يعمل")
     print("✨ جاهز")
     print("=" * 60 + "\n")
     
+    if APP_URL:
+        # url_path نجعلها آمنة باستخدام جزء من التوكن
+        url_path = BOT_TOKEN
+        print(f"تشغيل Webhook على: {APP_URL}/{url_path} (port {PORT})")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=url_path,
+            webhook_url=f"{APP_URL}/{url_path}"
+        )
+    else:
+        print("APP_URL غير معرف — تشغيل polling (غير موصى به في Render)")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+'''
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:
         print("\n🛑 توقف")
     except Exception as e:
         print(f"\n❌ {e}")
+'''
 
 if __name__ == '__main__':
     main()
