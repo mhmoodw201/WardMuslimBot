@@ -24,7 +24,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI"
+
+# ====== إعداد المتغيرات من البيئة ======
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # ضع التوكن في Render environment
+APP_URL = os.getenv("https://wardmuslimbot.onrender.com")      # مثال: https://your-service.onrender.com
+PORT = int(os.getenv("PORT", "10000"))  # Render يزوّد PORT تلقائياً لكن 10000 كقيمة احتياطية
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN غير مُعرّف في متغيرات البيئة")
+
+# لا تنشئ Application هنا — سننشئها داخل main() بعد إضافة handlers وتهيئة المهام.
+
+# ===============================================
+
 QURAN_PAGES = 604
 
 IMAGES_PATH = Path("images")
@@ -117,20 +130,6 @@ class Database:
 db = Database()
 
 
-
-# ===================================================================
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = "https://wardmuslimbot.onrender.com"  # انسخه لاحقاً من Render
-
-app = Application.builder().token(BOT_TOKEN).build()
-app.run_webhook(
-    listen="0.0.0.0",
-    port=10000,
-    url_path=BOT_TOKEN,
-    webhook_url=f"{APP_URL}/{BOT_TOKEN}"
-)
-
 # ======================== API التقويم الهجري ========================
 class IslamicCalendar:
     @staticmethod
@@ -200,17 +199,6 @@ class IslamicCalendar:
     def is_day_before_white_days():
         hijri = IslamicCalendar.get_hijri_date()
         return hijri and hijri['day'] == 12
-    
-
-# ====== إعداد المتغيرات من البيئة ======
-BOT_TOKEN = os.getenv("8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI")  # ضع التوكن في Render environment
-APP_URL = os.getenv("https://wardmuslimbot.onrender.com")      # مثال: https://your-service.onrender.com
-PORT = int(os.getenv("PORT", "10000"))  # Render يزوّد PORT تلقائياً لكن 10000 كقيمة احتياطية
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN غير مُعرّف في متغيرات البيئة")
-
-# لا تنشئ Application هنا — سننشئها داخل main() بعد إضافة handlers وتهيئة المهام.
 
 
 # ======================== محتوى الأذكار ========================
@@ -963,11 +951,9 @@ def main():
         print("\n❌ ضع التوكن في BOT_TOKEN")
         return
     
-    try:
-        application = Application.builder().token(BOT_TOKEN).build()
-    except Exception as e:
-        print(f"\n❌ خطأ: {e}")
-        return
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
