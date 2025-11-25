@@ -2,7 +2,6 @@ import asyncio
 import logging
 import sqlite3
 import requests
-import os
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,18 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ====== إعداد المتغيرات من البيئة ======
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # ضع التوكن في Render environment
-APP_URL = os.getenv("https://wardmuslimbot.onrender.com")      # مثال: https://your-service.onrender.com
-PORT = int(os.getenv("PORT", "10000"))  # Render يزوّد PORT تلقائياً لكن 10000 كقيمة احتياطية
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN غير مُعرّف في متغيرات البيئة")
-
-# لا تنشئ Application هنا — سننشئها داخل main() بعد إضافة handlers وتهيئة المهام.
-
-# ===============================================
+BOT_TOKEN = "8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI"
 
 QURAN_PAGES = 604
 
@@ -437,7 +425,7 @@ async def set_quran_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     user = db.get_user(query.from_user.id)
-    current_time = user[10] if user and len(user) > 10 else '09:00'
+    current_time = user[10] if user and len(user) > 10 else '20:00'
     
     await query.edit_message_text(
         f"⏰ *وقت الورد*\n\nالحالي: {current_time}",
@@ -612,7 +600,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_page = user[11] if len(user) > 11 else 1
             quran_time = user[10] if len(user) > 10 else '09:00'
             await query.edit_message_text(
-                f"📖 *وردك*\n\nصفحات: {pages}\nالحالية: {current_page}\nالوقت: {quran_time}",
+                f"📖 *تفاصيل وردك*\n\n📄 عدد صفحات: {pages}\n⏰ وقت التذكير: {quran_time}",
                 parse_mode='Markdown'
             )
     
@@ -906,7 +894,7 @@ def setup_jobs(application):
     job_queue.run_daily(send_morning_azkar, time=datetime.strptime('06:00', '%H:%M').time(), name='morning_azkar')
     job_queue.run_daily(send_evening_azkar, time=datetime.strptime('17:00', '%H:%M').time(), name='evening_azkar')
     job_queue.run_daily(send_mulk, time=datetime.strptime('22:00', '%H:%M').time(), name='mulk')
-    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('08:00', '%H:%M').time(), name='friday_kahf')
+    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('12:00', '%H:%M').time(), name='friday_kahf')
     job_queue.run_daily(check_islamic_occasions_daily, time=datetime.strptime('07:00', '%H:%M').time(), name='occasions')
     job_queue.run_daily(send_white_days_reminder, time=datetime.strptime('20:00', '%H:%M').time(), name='white_days')
     job_queue.run_daily(send_qiyam_reminder, time=datetime.strptime('02:00', '%H:%M').time(), name='qiyam')
@@ -952,7 +940,11 @@ def main():
         return
     
     
-    application = Application.builder().token(BOT_TOKEN).build()
+    try:
+        application = Application.builder().token(BOT_TOKEN).build()
+    except Exception as e:
+        print(f"\n❌ خطأ: {e}")
+        return
 
     
     application.add_handler(CommandHandler("start", start))
@@ -961,34 +953,20 @@ def main():
     application.add_handler(ChatMemberHandler(track_bot_added, ChatMemberHandler.MY_CHAT_MEMBER))
     
     application.post_init = post_init
-    #setup_jobs(application)
+    setup_jobs(application)
     
     print("\n🚀 البوت يعمل")
     print("✨ جاهز")
     print("=" * 60 + "\n")
     
-    if APP_URL:
-        # url_path نجعلها آمنة باستخدام جزء من التوكن
-        url_path = BOT_TOKEN
-        print(f"تشغيل Webhook على: {APP_URL}/{url_path} (port {PORT})")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=url_path,
-            webhook_url=f"{APP_URL}/{url_path}"
-        )
-    else:
-        print("APP_URL غير معرف — تشغيل polling (غير موصى به في Render)")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
     
-'''
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:
         print("\n🛑 توقف")
     except Exception as e:
         print(f"\n❌ {e}")
-'''
+
 
 if __name__ == '__main__':
     main()
