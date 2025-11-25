@@ -16,7 +16,7 @@ from telegram.ext import (
     ChatMemberHandler
 )
 from telegram.constants import ChatMemberStatus
-from telegram.ext import Application
+
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
