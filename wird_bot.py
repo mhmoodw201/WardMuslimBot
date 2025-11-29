@@ -1013,7 +1013,7 @@ def main():
             listen="0.0.0.0",
             port=PORT,
             url_path=BOT_TOKEN,
-            webhook_url=f"https://your-app.onrender.com/{BOT_TOKEN}"
+            webhook_url=f"https://wird-muslim-bot.onrender.com/{BOT_TOKEN}"
         )
     else:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
