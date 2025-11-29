@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 import sqlite3
@@ -12,10 +13,12 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
-    ChatMemberHandler
+    ChatMemberHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters
 )
 from telegram.constants import ChatMemberStatus
-
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -23,8 +26,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-BOT_TOKEN = "8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI"
+# استخدام متغير بيئة للتوكن (مهم لـ Render)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+PORT = int(os.environ.get("PORT", 8443))
 
 QURAN_PAGES = 604
 
@@ -39,6 +43,9 @@ QURAN_PAGES_PATH.mkdir(exist_ok=True)
 AZKAR_PATH.mkdir(exist_ok=True)
 BAKARAH_QIYAM_PATH.mkdir(exist_ok=True)
 PDF_PATH.mkdir(exist_ok=True)
+
+# حالات المحادثة
+SELECTING_CITY = 1
 
 # ======================== قاعدة البيانات ========================
 class Database:
@@ -57,13 +64,13 @@ class Database:
                 bakarah_enabled BOOLEAN DEFAULT 0,
                 morning_azkar_enabled BOOLEAN DEFAULT 1,
                 evening_azkar_enabled BOOLEAN DEFAULT 1,
-                morning_azkar_time TEXT DEFAULT '06:00',
-                evening_azkar_time TEXT DEFAULT '17:00',
                 kahf_enabled BOOLEAN DEFAULT 1,
                 mulk_enabled BOOLEAN DEFAULT 1,
                 quran_time TEXT DEFAULT '09:00',
                 current_page INTEGER DEFAULT 1,
                 white_days_reminder BOOLEAN DEFAULT 1,
+                city TEXT DEFAULT 'Makkah',
+                country TEXT DEFAULT 'Saudi Arabia',
                 timezone_offset INTEGER DEFAULT 3,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -76,10 +83,10 @@ class Database:
         columns = [column[1] for column in cursor.fetchall()]
         
         columns_to_add = {
-            'morning_azkar_enabled': 'BOOLEAN DEFAULT 1',
-            'evening_azkar_enabled': 'BOOLEAN DEFAULT 1',
-            'white_days_reminder': 'BOOLEAN DEFAULT 1',
-            'timezone_offset': 'INTEGER DEFAULT 3'
+            'city': 'TEXT DEFAULT "Makkah"',
+            'country': 'TEXT DEFAULT "Saudi Arabia"',
+            'timezone_offset': 'INTEGER DEFAULT 3',
+            'white_days_reminder': 'BOOLEAN DEFAULT 1'
         }
         
         for column_name, column_def in columns_to_add.items():
@@ -117,6 +124,31 @@ class Database:
 
 db = Database()
 
+# ======================== المدن المتاحة ========================
+CITIES = {
+    '🇸🇦 مكة المكرمة': ('Makkah', 'Saudi Arabia', 3),
+    '🇸🇦 المدينة المنورة': ('Madinah', 'Saudi Arabia', 3),
+    '🇸🇦 الرياض': ('Riyadh', 'Saudi Arabia', 3),
+    '🇸🇦 جدة': ('Jeddah', 'Saudi Arabia', 3),
+    '🇦🇪 دبي': ('Dubai', 'United Arab Emirates', 4),
+    '🇦🇪 أبوظبي': ('Abu Dhabi', 'United Arab Emirates', 4),
+    '🇪🇬 القاهرة': ('Cairo', 'Egypt', 2),
+    '🇪🇬 الإسكندرية': ('Alexandria', 'Egypt', 2),
+    '🇯🇴 عمّان': ('Amman', 'Jordan', 3),
+    '🇰🇼 الكويت': ('Kuwait City', 'Kuwait', 3),
+    '🇶🇦 الدوحة': ('Doha', 'Qatar', 3),
+    '🇧🇭 المنامة': ('Manama', 'Bahrain', 3),
+    '🇴🇲 مسقط': ('Muscat', 'Oman', 4),
+    '🇾🇪 صنعاء': ('Sanaa', 'Yemen', 3),
+    '🇸🇾 دمشق': ('Damascus', 'Syria', 3),
+    '🇱🇧 بيروت': ('Beirut', 'Lebanon', 3),
+    '🇮🇶 بغداد': ('Baghdad', 'Iraq', 3),
+    '🇵🇸 القدس': ('Jerusalem', 'Palestine', 3),
+    '🇱🇾 طرابلس': ('Tripoli', 'Libya', 2),
+    '🇹🇳 تونس': ('Tunis', 'Tunisia', 1),
+    '🇩🇿 الجزائر': ('Algiers', 'Algeria', 1),
+    '🇲🇦 الرباط': ('Rabat', 'Morocco', 1),
+}
 
 # ======================== API التقويم الهجري ========================
 class IslamicCalendar:
@@ -169,17 +201,20 @@ class IslamicCalendar:
         month = hijri['month']
         
         occasions = {
-            (1, 1): "🌙 رأس السنة الهجرية",
-            (1, 10): "🕌 صيام يوم عاشوراء",
-            (9, 1): "🌙 رمضان كريم",
-            (9, 27): "⭐ ليلة القدر",
-            (10, 1): "🎉 عيد الفطر المبارك",
-            (10, 9): "🕋 يوم عرفة",
-            (10, 10): "🎊 عيد الأضحى المبارك"
+            (1, 1): "🌙 رأس السنة الهجرية\n\nعن أبي هريرة رضي الله عنه: \"خير يوم طلعت فيه الشمس يوم الجمعة\"",
+            (1, 10): "🕌 يوم عاشوراء\n\nعن ابن عباس رضي الله عنهما: \"ما رأيت النبي ﷺ يتحرى صيام يوم فضله على غيره إلا هذا اليوم، يوم عاشوراء\"",
+            (3, 12): "💚 المولد النبوي الشريف\n\nوُلد خير البشر محمد ﷺ",
+            (7, 27): "✨ ليلة الإسراء والمعراج\n\n﴿سُبْحَانَ الَّذِي أَسْرَىٰ بِعَبْدِهِ لَيْلًا﴾",
+            (8, 15): "🌟 ليلة النصف من شعبان\n\nعن عائشة رضي الله عنها: \"فقدت رسول الله ﷺ ليلة، فإذا هو بالبقيع\"",
+            (9, 1): "🌙 أول رمضان\n\n﴿شَهْرُ رَمَضَانَ الَّذِي أُنزِلَ فِيهِ الْقُرْآنُ﴾",
+            (9, 27): "⭐ ليلة القدر\n\n﴿لَيْلَةُ الْقَدْرِ خَيْرٌ مِّنْ أَلْفِ شَهْرٍ﴾",
+            (10, 1): "🎉 عيد الفطر المبارك\n\nتقبل الله منا ومنكم",
+            (10, 9): "🕋 يوم عرفة\n\nعن النبي ﷺ: \"ما من يوم أكثر من أن يعتق الله فيه عبدًا من النار من يوم عرفة\"",
+            (10, 10): "🎊 عيد الأضحى\n\n﴿فَصَلِّ لِرَبِّكَ وَانْحَرْ﴾"
         }
         
         if day in [13, 14, 15]:
-            return f"⚪ صيام الأيام البيض ({day} {hijri['month_name']})"
+            return f"⚪ الأيام البيض ({day} {hijri['month_name']})\n\nعن أبي ذر رضي الله عنه قال: أمرنا رسول الله ﷺ أن نصوم من الشهر ثلاثة أيام: البيض، ثلاث عشرة وأربع عشرة وخمس عشرة"
         
         return occasions.get((month, day))
     
@@ -188,42 +223,95 @@ class IslamicCalendar:
         hijri = IslamicCalendar.get_hijri_date()
         return hijri and hijri['day'] == 12
 
-
 # ======================== محتوى الأذكار ========================
 class IslamicContent:
+    MORNING_AZKAR = """☀️ *أذكار الصباح*
+
+﴿فَاذْكُرُونِي أَذْكُرْكُمْ وَاشْكُرُوا لِي وَلَا تَكْفُرُونِ﴾
+
+قال رسول الله ﷺ: "من قال حين يصبح: أصبحنا وأصبح الملك لله، كتب الله له بها عشر حسنات"
+"""
+
+    EVENING_AZKAR = """🌙 *أذكار المساء*
+
+﴿وَاذْكُر رَّبَّكَ فِي نَفْسِكَ تَضَرُّعًا وَخِيفَةً﴾
+
+عن النبي ﷺ: "من قال حين يمسي: أمسينا وأمسى الملك لله، لم يزل في ذمة الله حتى يصبح"
+"""
+
+    MULK_REMINDER = """🌙 *سورة الملك*
+
+﴿تَبَارَكَ الَّذِي بِيَدِهِ الْمُلْكُ وَهُوَ عَلَىٰ كُلِّ شَيْءٍ قَدِيرٌ﴾
+
+عن أبي هريرة رضي الله عنه قال: قال رسول الله ﷺ: "إن سورة من القرآن ثلاثون آية شفعت لرجل حتى غُفر له، وهي سورة تبارك الذي بيده الملك"
+
+🕌 طابت ليلتك بذكر الله
+"""
+
+    KAHF_FRIDAY = """🕌 *يوم الجمعة المبارك*
+
+📖 سورة الكهف
+
+﴿الْحَمْدُ لِلَّهِ الَّذِي أَنزَلَ عَلَىٰ عَبْدِهِ الْكِتَابَ وَلَمْ يَجْعَل لَّهُ عِوَجًا﴾
+
+عن أبي سعيد الخدري رضي الله عنه قال: قال النبي ﷺ: "من قرأ سورة الكهف في يوم الجمعة أضاء له من النور ما بين الجمعتين"
+
+💚 *الصلاة على النبي ﷺ*
+
+عن أوس بن أوس رضي الله عنه قال: قال رسول الله ﷺ: "إن من أفضل أيامكم يوم الجمعة، فأكثروا علي من الصلاة فيه"
+
+اللهم صل وسلم وبارك على سيدنا محمد وعلى آله وصحبه أجمعين
+
+🤲 جمعة مباركة
+"""
+
+    QIYAM_REMINDER = """🌙 *قيام الليل والوتر*
+
+عن أبي هريرة رضي الله عنه أن رسول الله ﷺ قال: "ينزل ربنا تبارك وتعالى كل ليلة إلى السماء الدنيا حين يبقى ثلث الليل الآخر، فيقول: من يدعوني فأستجيب له، من يسألني فأعطيه، من يستغفرني فأغفر له"
+
+🤲 *دعاء قيام الليل:*
+
+اللهم لك الحمد أنت نور السماوات والأرض، ولك الحمد أنت قيم السماوات والأرض، ولك الحمد أنت رب السماوات والأرض ومن فيهن
+
+✨ بارك الله في قيامك
+"""
+
     TASBIH_TYPES = [
-        "📿 *تسبيح*\n\n🔹 سبحان الله (33)\n🔹 الحمد لله (33)\n🔹 الله أكبر (34)",
-        "📿 *تسبيح*\n\n🔹 سبحان الله وبحمده (100 مرة)",
-        "📿 *تسبيح*\n\n🔹 سبحان الله العظيم وبحمده",
-        "📿 *تسبيح*\n\n🔹 سبحان الله والحمد لله ولا إله إلا الله والله أكبر",
-        "📿 *تسبيح*\n\n🔹 لا إله إلا الله وحده لا شريك له (10 مرات)"
-    ]
-    
-    ISTIGHFAR_TYPES = [
-        "🤲 *استغفار*\n\n🔹 أستغفر الله العظيم وأتوب إليه (3 مرات)",
-        "🤲 *سيد الاستغفار*\n\n🔹 اللهم أنت ربي لا إله إلا أنت، خلقتني وأنا عبدك، وأنا على عهدك ووعدك ما استطعت، أعوذ بك من شر ما صنعت، أبوء لك بنعمتك عليّ، وأبوء بذنبي فاغفر لي، فإنه لا يغفر الذنوب إلا أنت.",
-        "🤲 *استغفار*\n\n🔹 أستغفر الله وأتوب إليه (100 مرة)",
-        "🤲 *استغفار*\n\n🔹 رب اغفر لي وتب علي (100 مرة)",
-        "🤲 *استغفار*\n\n🔹 اللهم اغفر لي ذنبي كلّه، دقّه وجلّه، وأوله وآخره، وعلانيته وسرّه"
-    ]
-    
-    GENERAL_AZKAR = [
-        "💎 *ذكر*\n\n🔹 لا حول ولا قوة إلا بالله",
-        "💎 *الباقيات الصالحات*\n\n🔹 سبحان الله والحمد لله ولا إله إلا الله والله أكبر",
-        "💎 *الصلاة على النبي ﷺ*\n\n🔹 اللهم صل وسلم وبارك على سيدنا محمد",
-        "💎 *كلمتان خفيفتان*\n\n🔹 سبحان الله وبحمده، سبحان الله العظيم",
-        "💎 *أفضل الذكر*\n\n🔹 لا إله إلا الله"
+        """📿 *تسبيح*
+
+🔹 سبحان الله (33 مرة)
+🔹 الحمد لله (33 مرة)
+🔹 الله أكبر (34 مرة)
+
+عن أبي هريرة رضي الله عنه قال: قال رسول الله ﷺ: "من سبح الله في دبر كل صلاة ثلاثًا وثلاثين، وحمد الله ثلاثًا وثلاثين، وكبر الله ثلاثًا وثلاثين... غُفرت خطاياه وإن كانت مثل زبد البحر"
+""",
+        """📿 *تسبيح*
+
+🔹 سبحان الله وبحمده (100 مرة)
+
+عن أبي هريرة رضي الله عنه قال: قال رسول الله ﷺ: "من قال: سبحان الله وبحمده، في يوم مئة مرة، حُطت خطاياه وإن كانت مثل زبد البحر"
+""",
+        """💎 *لا حول ولا قوة إلا بالله*
+
+عن أبي موسى الأشعري رضي الله عنه قال: قال لي رسول الله ﷺ: "ألا أدلك على كنز من كنوز الجنة؟" فقلت: بلى يا رسول الله، قال: "لا حول ولا قوة إلا بالله"
+""",
+        """🤲 *استغفار*
+
+🔹 أستغفر الله العظيم الذي لا إله إلا هو الحي القيوم وأتوب إليه
+
+عن بلال بن يسار رضي الله عنه قال: قال رسول الله ﷺ: "من قال: أستغفر الله العظيم الذي لا إله إلا هو الحي القيوم وأتوب إليه، غُفر له وإن كان فرّ من الزحف"
+""",
+        """💚 *الصلاة على النبي ﷺ*
+
+🔹 اللهم صل وسلم وبارك على سيدنا محمد
+
+عن أبي هريرة رضي الله عنه قال: قال رسول الله ﷺ: "من صلى علي واحدة صلى الله عليه عشرًا"
+"""
     ]
     
     @staticmethod
     def get_random_dhikr():
-        dhikr_type = random.choice(['tasbih', 'istighfar', 'general'])
-        if dhikr_type == 'tasbih':
-            return random.choice(IslamicContent.TASBIH_TYPES)
-        elif dhikr_type == 'istighfar':
-            return random.choice(IslamicContent.ISTIGHFAR_TYPES)
-        else:
-            return random.choice(IslamicContent.GENERAL_AZKAR)
+        return random.choice(IslamicContent.TASBIH_TYPES)
 
 # ======================== إدارة الصور ========================
 class MediaManager:
@@ -275,53 +363,66 @@ class MediaManager:
         pdf_file = PDF_PATH / "surah_kahf.pdf"
         return pdf_file if pdf_file.exists() else None
 
-# ======================== معالج إضافة البوت للمجموعات ========================
-async def track_bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تشغيل تلقائي عند إضافة البوت لمجموعة أو قناة"""
-    result = update.my_chat_member
-    if result is None:
-        return
+# ======================== اختيار المدينة ========================
+async def ask_city_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """طلب اختيار المدينة"""
+    keyboard = []
+    cities_list = list(CITIES.keys())
     
-    new_status = result.new_chat_member.status
-    chat = result.chat
+    # ترتيب الأزرار في صفوف (3 أزرار في كل صف)
+    for i in range(0, len(cities_list), 2):
+        row = [InlineKeyboardButton(city, callback_data=f'city_{i+j}') 
+               for j, city in enumerate(cities_list[i:i+2])]
+        keyboard.append(row)
     
-    if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
-        # تم إضافة البوت للمجموعة/القناة
-        db.add_user(chat.id, chat.id)
-        
-        welcome_message = f"""
-السلام عليكم ورحمة الله وبركاته 🌙
-
-تم تفعيل *وِرْدُ المُسْلِم*   {'للمجموعة' if chat.type in ['group', 'supergroup'] else 'للقناة'} 
-
-📚 سيتم إرسال التذكيرات:
-• الورد اليومي من القرآن
-• أذكار الصباح والمساء
-• سورة الكهف (الجمعة)
-• سورة البقرة (اختياري)
-• المناسبات الإسلامية
-• أذكار متنوعة
-
-🕌 بارك الله فيكم
-        """
-        
-        try:
-            await context.bot.send_message(
-                chat_id=chat.id,
-                text=welcome_message,
-                parse_mode='Markdown'
-            )
-        except:
-            pass
-
-# ======================== وظائف البوت ========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    chat_type = update.effective_chat.type
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    db.add_user(user.id, chat_id)
+    message = """🌍 *اختر مدينتك*
+
+لضبط مواقيت الصلاة والتذكيرات حسب موقعك
+"""
     
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    return SELECTING_CITY
+
+async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة اختيار المدينة"""
+    query = update.callback_query
+    await query.answer()
+    
+    city_index = int(query.data.split('_')[1])
+    city_name = list(CITIES.keys())[city_index]
+    city, country, tz = CITIES[city_name]
+    
+    user_id = query.from_user.id
+    db.update_user_setting(user_id, 'city', city)
+    db.update_user_setting(user_id, 'country', country)
+    db.update_user_setting(user_id, 'timezone_offset', tz)
+    
+    await query.edit_message_text(
+        f"✅ تم ضبط المدينة: {city_name}\n\n🕌 مرحباً بك في *وِرْدُ المُسْلِم*",
+        parse_mode='Markdown'
+    )
+    
+    await asyncio.sleep(1)
+    await show_main_menu(update, context)
+    
+    return ConversationHandler.END
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض القائمة الرئيسية"""
     keyboard = [
         [InlineKeyboardButton("⚙️ إعداداتي", callback_data='settings')],
         [InlineKeyboardButton("📖 الورد اليومي", callback_data='daily_wird')],
@@ -330,24 +431,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if chat_type in ['group', 'supergroup', 'channel']:
-        welcome_message = """
-السلام عليكم ورحمة الله وبركاته 🌙
-
-*وِرْدُ المُسْلِم*
-
-📚 التذكيرات:
-• الورد اليومي (صور)
-• أذكار الصباح والمساء
-• سورة الكهف (الجمعة)
-• سورة البقرة (اختياري)
-• المناسبات الإسلامية
-
-🕌 بارك الله فيكم
-        """
-    else:
-        welcome_message = f"""
-السلام عليكم {user.first_name} 🌙
+    message = """السلام عليكم ورحمة الله وبركاته 🌙
 
 *وِرْدُ المُسْلِم*
 
@@ -357,149 +441,173 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • المناسبات الإسلامية
 
 اضغط الأزرار أدناه 👇
-        """
+"""
     
-    await update.message.reply_text(
-        welcome_message,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+# ======================== معالج إضافة البوت للمجموعات ========================
+async def track_bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تشغيل تلقائي عند إضافة البوت"""
+    result = update.my_chat_member
+    if result is None:
+        return
+    
+    new_status = result.new_chat_member.status
+    chat = result.chat
+    
+    if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
+        db.add_user(chat.id, chat.id)
+        
+        welcome_message = """
+السلام عليكم ورحمة الله وبركاته 🌙
+
+تم تفعيل *وِرْدُ المُسْلِم*
+
+📚 سيتم إرسال:
+• الورد اليومي
+• أذكار الصباح والمساء
+• سورة الكهف (الجمعة)
+• المناسبات الإسلامية
+
+🕌 بارك الله فيكم
+        """
+        
+        try:
+            await context.bot.send_message(chat_id=chat.id, text=welcome_message, parse_mode='Markdown')
+        except:
+            pass
+
+# ======================== وظائف البوت ========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء البوت"""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    
+    db.add_user(user.id, chat_id)
+    
+    # التحقق من وجود مدينة محفوظة
+    user_data = db.get_user(user.id)
+    
+    if not user_data or (len(user_data) > 11 and not user_data[11]):
+        # لم يختر مدينة بعد
+        return await ask_city_selection(update, context)
+    
+    # عرض القائمة الرئيسية
+    if chat_type in ['group', 'supergroup', 'channel']:
+        welcome_message = """
+السلام عليكم 🌙
+
+*وِرْدُ المُسْلِم*
+
+📚 التذكيرات:
+• الورد اليومي
+• أذكار الصباح والمساء
+• سورة الكهف (الجمعة)
+• المناسبات
+
+🕌 بارك الله فيكم
+        """
+        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+    else:
+        await show_main_menu(update, context)
 
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """قائمة الإعدادات"""
     query = update.callback_query
     await query.answer()
     
     keyboard = [
         [InlineKeyboardButton("📖 عدد الصفحات", callback_data='set_pages')],
         [InlineKeyboardButton("⏰ وقت الورد", callback_data='set_quran_time')],
-        [InlineKeyboardButton("🌍 التوقيت", callback_data='set_timezone')],
+        [InlineKeyboardButton("🌍 المدينة", callback_data='set_city')],
         [InlineKeyboardButton("📗 سورة البقرة", callback_data='set_bakarah')],
         [InlineKeyboardButton("🔔 التنبيهات", callback_data='set_notifications')],
         [InlineKeyboardButton("🔙 رجوع", callback_data='back_main')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        "⚙️ *الإعدادات*",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("⚙️ *الإعدادات*", reply_markup=reply_markup, parse_mode='Markdown')
 
 async def set_daily_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعيين عدد الصفحات"""
     query = update.callback_query
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("1", callback_data='pages_1'),
-         InlineKeyboardButton("2", callback_data='pages_2'),
-         InlineKeyboardButton("3", callback_data='pages_3')],
-        [InlineKeyboardButton("5", callback_data='pages_5'),
-         InlineKeyboardButton("10", callback_data='pages_10'),
-         InlineKeyboardButton("20", callback_data='pages_20')],
+        [InlineKeyboardButton("1", callback_data='pages_1'), InlineKeyboardButton("2", callback_data='pages_2'), InlineKeyboardButton("3", callback_data='pages_3')],
+        [InlineKeyboardButton("5", callback_data='pages_5'), InlineKeyboardButton("10", callback_data='pages_10'), InlineKeyboardButton("20", callback_data='pages_20')],
         [InlineKeyboardButton("🔙 رجوع", callback_data='settings')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        "📖 *عدد الصفحات*",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("📖 *عدد الصفحات*", reply_markup=reply_markup, parse_mode='Markdown')
 
 async def set_quran_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعيين وقت الورد"""
     query = update.callback_query
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("05:00 صباح", callback_data='qtime_05:00'),
-         InlineKeyboardButton("06:00 صباح", callback_data='qtime_06:00'),
-         InlineKeyboardButton("07:00 صباح", callback_data='qtime_07:00')],
-        [InlineKeyboardButton("08:00 صباح", callback_data='qtime_08:00'),
-         InlineKeyboardButton("09:00 صباح", callback_data='qtime_09:00'),
-         InlineKeyboardButton("10:00 صباح", callback_data='qtime_10:00')],
-        [InlineKeyboardButton("08:00 مساء", callback_data='qtime_20:00'),
-         InlineKeyboardButton("09:00 مساء", callback_data='qtime_21:00'),
-         InlineKeyboardButton("10:00 مساء", callback_data='qtime_22:00')],
+        [InlineKeyboardButton("05:00", callback_data='qtime_05:00'), InlineKeyboardButton("06:00", callback_data='qtime_06:00'), InlineKeyboardButton("07:00", callback_data='qtime_07:00')],
+        [InlineKeyboardButton("08:00", callback_data='qtime_08:00'), InlineKeyboardButton("09:00", callback_data='qtime_09:00'), InlineKeyboardButton("10:00", callback_data='qtime_10:00')],
+        [InlineKeyboardButton("20:00", callback_data='qtime_20:00'), InlineKeyboardButton("21:00", callback_data='qtime_21:00'), InlineKeyboardButton("22:00", callback_data='qtime_22:00')],
         [InlineKeyboardButton("🔙 رجوع", callback_data='settings')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    user = db.get_user(query.from_user.id)
-    current_time = user[10] if user and len(user) > 10 else '20:00'
-    
-    await query.edit_message_text(
-        f"⏰ *وقت الورد*\n\nالحالي: {current_time}",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-async def set_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("🇸🇦 السعودية (UTC+3)", callback_data='tz_3')],
-        [InlineKeyboardButton("🇦🇪 الإمارات (UTC+4)", callback_data='tz_4')],
-        [InlineKeyboardButton("🇪🇬 مصر (UTC+2)", callback_data='tz_2')],
-        [InlineKeyboardButton("🇯🇴 الأردن (UTC+3)", callback_data='tz_3')],
-        [InlineKeyboardButton("🔙 رجوع", callback_data='settings')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    user = db.get_user(query.from_user.id)
-    current_tz = user[13] if user and len(user) > 13 else 3
-    
-    await query.edit_message_text(
-        f"🌍 *التوقيت*\n\nالحالي: UTC+{current_tz}",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("⏰ *وقت الورد*", reply_markup=reply_markup, parse_mode='Markdown')
 
 async def set_bakarah_setting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إعدادات سورة البقرة"""
     query = update.callback_query
     await query.answer()
     
     user = db.get_user(query.from_user.id)
-    bakarah_status = "مفعّلة ✅" if user and len(user) > 3 and user[3] else "معطّلة ❌"
+    bakarah_status = "✅ مفعّلة" if user and len(user) > 3 and user[3] else "❌ معطّلة"
     
     keyboard = [
-        [InlineKeyboardButton("تفعيل ✅" if not (user and len(user) > 3 and user[3]) else "تعطيل ❌", 
-                            callback_data='toggle_bakarah')],
+        [InlineKeyboardButton("تفعيل ✅" if not (user and len(user) > 3 and user[3]) else "تعطيل ❌", callback_data='toggle_bakarah')],
         [InlineKeyboardButton("🔙 رجوع", callback_data='settings')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        f"📗 *سورة البقرة*\n\nالحالة: {bakarah_status}\n\n12 صفحة على 5 صلوات",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text(f"📗 *سورة البقرة*\n\n{bakarah_status}\n\n12 صفحة على 5 صلوات", reply_markup=reply_markup, parse_mode='Markdown')
 
 async def set_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إعدادات التنبيهات"""
     query = update.callback_query
     await query.answer()
     
     user = db.get_user(query.from_user.id)
     
-    kahf_enabled = user[8] if user and len(user) > 8 else 1
-    mulk_enabled = user[9] if user and len(user) > 9 else 1
-    white_days_enabled = user[12] if user and len(user) > 12 else 1
+    kahf = user[6] if user and len(user) > 6 else 1
+    mulk = user[7] if user and len(user) > 7 else 1
+    white = user[10] if user and len(user) > 10 else 1
     
     keyboard = [
-        [InlineKeyboardButton(f"{'✅' if kahf_enabled else '❌'} سورة الكهف", callback_data='toggle_kahf')],
-        [InlineKeyboardButton(f"{'✅' if mulk_enabled else '❌'} سورة الملك", callback_data='toggle_mulk')],
-        [InlineKeyboardButton(f"{'✅' if white_days_enabled else '❌'} الأيام البيض", callback_data='toggle_white_days')],
+        [InlineKeyboardButton(f"{'✅' if kahf else '❌'} سورة الكهف", callback_data='toggle_kahf')],
+        [InlineKeyboardButton(f"{'✅' if mulk else '❌'} سورة الملك", callback_data='toggle_mulk')],
+        [InlineKeyboardButton(f"{'✅' if white else '❌'} الأيام البيض", callback_data='toggle_white_days')],
         [InlineKeyboardButton("🔙 رجوع", callback_data='settings')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        "🔔 *التنبيهات*",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("🔔 *التنبيهات*", reply_markup=reply_markup, parse_mode='Markdown')
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج الأزرار"""
     query = update.callback_query
     await query.answer()
     
@@ -507,143 +615,90 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     
     if data == 'back_main':
-        keyboard = [
-            [InlineKeyboardButton("⚙️ إعداداتي", callback_data='settings')],
-            [InlineKeyboardButton("📖 الورد اليومي", callback_data='daily_wird')],
-            [InlineKeyboardButton("📿 أذكار سريعة", callback_data='quick_azkar')],
-            [InlineKeyboardButton("ℹ️ المساعدة", callback_data='help')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("🏠 *القائمة*", reply_markup=reply_markup, parse_mode='Markdown')
-    
+        await show_main_menu(update, context)
     elif data == 'settings':
         await settings_menu(update, context)
     elif data == 'set_pages':
         await set_daily_pages(update, context)
     elif data == 'set_quran_time':
         await set_quran_time(update, context)
-    elif data == 'set_timezone':
-        await set_timezone(update, context)
+    elif data == 'set_city':
+        await ask_city_selection(update, context)
     elif data == 'set_bakarah':
         await set_bakarah_setting(update, context)
     elif data == 'set_notifications':
         await set_notifications(update, context)
-    
     elif data.startswith('pages_'):
         pages = int(data.split('_')[1])
         db.update_user_setting(user_id, 'daily_pages', pages)
         await query.edit_message_text(f"✅ {pages} صفحة", parse_mode='Markdown')
         await asyncio.sleep(1)
         await settings_menu(update, context)
-    
     elif data.startswith('qtime_'):
         time_str = data.split('_')[1]
         db.update_user_setting(user_id, 'quran_time', time_str)
-        
-        job_name = f'daily_wird_{user_id}'
-        current_jobs = context.application.job_queue.get_jobs_by_name(job_name)
-        for job in current_jobs:
-            job.schedule_removal()
-        
-        user = db.get_user(user_id)
-        tz_offset = user[13] if user and len(user) > 13 else 3
-        
-        context.application.job_queue.run_daily(
-            lambda c: send_daily_wird_single(c, user_id),
-            time=datetime.strptime(time_str, '%H:%M').time(),
-            name=job_name
-        )
-        
         await query.edit_message_text(f"✅ الوقت: {time_str}", parse_mode='Markdown')
         await asyncio.sleep(1)
         await settings_menu(update, context)
-    
-    elif data.startswith('tz_'):
-        tz = int(data.split('_')[1])
-        db.update_user_setting(user_id, 'timezone_offset', tz)
-        await query.edit_message_text(f"✅ التوقيت: UTC+{tz}", parse_mode='Markdown')
-        await asyncio.sleep(1)
-        await settings_menu(update, context)
-    
     elif data == 'toggle_bakarah':
         user = db.get_user(user_id)
-        current_value = user[3] if user and len(user) > 3 else 0
-        new_value = 0 if current_value else 1
-        db.update_user_setting(user_id, 'bakarah_enabled', new_value)
+        current = user[3] if user and len(user) > 3 else 0
+        db.update_user_setting(user_id, 'bakarah_enabled', 0 if current else 1)
         await set_bakarah_setting(update, context)
-    
     elif data == 'toggle_kahf':
         user = db.get_user(user_id)
-        current_value = user[8] if user and len(user) > 8 else 1
-        new_value = 0 if current_value else 1
-        db.update_user_setting(user_id, 'kahf_enabled', new_value)
+        current = user[6] if user and len(user) > 6 else 1
+        db.update_user_setting(user_id, 'kahf_enabled', 0 if current else 1)
         await set_notifications(update, context)
-    
     elif data == 'toggle_mulk':
         user = db.get_user(user_id)
-        current_value = user[9] if user and len(user) > 9 else 1
-        new_value = 0 if current_value else 1
-        db.update_user_setting(user_id, 'mulk_enabled', new_value)
+        current = user[7] if user and len(user) > 7 else 1
+        db.update_user_setting(user_id, 'mulk_enabled', 0 if current else 1)
         await set_notifications(update, context)
-    
     elif data == 'toggle_white_days':
         user = db.get_user(user_id)
-        current_value = user[12] if user and len(user) > 12 else 1
-        new_value = 0 if current_value else 1
-        db.update_user_setting(user_id, 'white_days_reminder', new_value)
+        current = user[10] if user and len(user) > 10 else 1
+        db.update_user_setting(user_id, 'white_days_reminder', 0 if current else 1)
         await set_notifications(update, context)
-    
     elif data == 'daily_wird':
         user = db.get_user(user_id)
         if user:
             pages = user[2] if len(user) > 2 else 2
-            current_page = user[11] if len(user) > 11 else 1
-            quran_time = user[10] if len(user) > 10 else '09:00'
-            await query.edit_message_text(
-                f"📖 *تفاصيل وردك*\n\n📄 عدد صفحات: {pages}\n⏰ وقت التذكير: {quran_time}",
-                parse_mode='Markdown'
-            )
-    
+            quran_time = user[8] if len(user) > 8 else '09:00'
+            await query.edit_message_text(f"📖 *وردك*\n\nالصفحات: {pages}\nالوقت: {quran_time}", parse_mode='Markdown')
     elif data == 'quick_azkar':
         keyboard = [
-            [InlineKeyboardButton("📿 تسبيح", callback_data='random_tasbih')],
-            [InlineKeyboardButton("🤲 استغفار", callback_data='random_istighfar')],
-            [InlineKeyboardButton("💎 ذكر", callback_data='random_dhikr')],
+            [InlineKeyboardButton("📿 ذكر", callback_data='random_dhikr')],
             [InlineKeyboardButton("🔙 رجوع", callback_data='back_main')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("📿 *أذكار*", reply_markup=reply_markup, parse_mode='Markdown')
-    
-    elif data in ['random_tasbih', 'random_istighfar', 'random_dhikr']:
+    elif data == 'random_dhikr':
         await query.edit_message_text(IslamicContent.get_random_dhikr(), parse_mode='Markdown')
-    
     elif data == 'help':
-        help_text = """
-ℹ️ *وِرْدُ المُسْلِم*
+        help_text = """ℹ️ *وِرْدُ المُسْلِم*
 
 /start - البدء
 
 *المميزات:*
-📖 الورد اليومي (صور)
-📗 سورة البقرة (12 صفحة)
+📖 الورد اليومي
+📗 سورة البقرة
 ☀️ أذكار الصباح والمساء
 🌙 سورة الملك
-🕋 سورة الكهف (الجمعة)
+🕋 سورة الكهف
 ⚪ الأيام البيض
 📅 المناسبات
 
 *للمجموعات:*
 أضف البوت وسيعمل تلقائياً
 
-🤲 بارك الله فيك
-        """
+🤲 بارك الله فيك"""
         await query.edit_message_text(help_text, parse_mode='Markdown')
 
 # ======================== المهام المجدولة ========================
 async def send_morning_azkar(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users()
     image_path = MediaManager.get_morning_azkar_image()
-    caption = "☀️ *أذكار الصباح*\n\n﴿فَاذْكُرُونِي أَذْكُرْكُمْ﴾"
     
     for user in users:
         morning_enabled = user[4] if len(user) > 4 else 1
@@ -651,16 +706,15 @@ async def send_morning_azkar(context: ContextTypes.DEFAULT_TYPE):
             try:
                 if image_path:
                     with open(image_path, 'rb') as photo:
-                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=caption, parse_mode='Markdown')
+                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=IslamicContent.MORNING_AZKAR, parse_mode='Markdown')
                 else:
-                    await context.bot.send_message(chat_id=user[1], text=caption, parse_mode='Markdown')
+                    await context.bot.send_message(chat_id=user[1], text=IslamicContent.MORNING_AZKAR, parse_mode='Markdown')
             except:
                 pass
 
 async def send_evening_azkar(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users()
     image_path = MediaManager.get_evening_azkar_image()
-    caption = "🌙 *أذكار المساء*\n\n﴿وَاذْكُر رَّبَّكَ﴾"
     
     for user in users:
         evening_enabled = user[5] if len(user) > 5 else 1
@@ -668,9 +722,9 @@ async def send_evening_azkar(context: ContextTypes.DEFAULT_TYPE):
             try:
                 if image_path:
                     with open(image_path, 'rb') as photo:
-                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=caption, parse_mode='Markdown')
+                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=IslamicContent.EVENING_AZKAR, parse_mode='Markdown')
                 else:
-                    await context.bot.send_message(chat_id=user[1], text=caption, parse_mode='Markdown')
+                    await context.bot.send_message(chat_id=user[1], text=IslamicContent.EVENING_AZKAR, parse_mode='Markdown')
             except:
                 pass
 
@@ -681,16 +735,19 @@ async def send_daily_wird_single(context: ContextTypes.DEFAULT_TYPE, user_id: in
     
     try:
         pages = user[2] if len(user) > 2 else 2
-        current_page = user[11] if len(user) > 11 else 1
+        current_page = user[9] if len(user) > 9 else 1
         
         end_page = current_page + pages - 1
         if end_page > QURAN_PAGES:
             end_page = QURAN_PAGES
             current_page = 1
         
-        caption = f"📖 *الورد اليومي*\n\n إِنَّ هَذَا الْقُرْآنَ يَهْدِي لِلَّتِي هِيَ أَقْوَمُ [الإسراء:9]\n\nالصفحات: {current_page} - {end_page}"
+        caption = f"""📖 *الورد اليومي*
+
+﴿إِنَّ الَّذِينَ يَتْلُونَ كِتَابَ اللَّهِ وَأَقَامُوا الصَّلَاةَ وَأَنفَقُوا مِمَّا رَزَقْنَاهُمْ سِرًّا وَعَلَانِيَةً يَرْجُونَ تِجَارَةً لَّن تَبُورَ﴾
+
+الصفحات: {current_page} - {end_page}"""
         
-        # جمع الصور
         media_group = []
         for page_num in range(current_page, min(current_page + 10, end_page + 1)):
             image_path = MediaManager.get_quran_page_image(page_num)
@@ -704,7 +761,6 @@ async def send_daily_wird_single(context: ContextTypes.DEFAULT_TYPE, user_id: in
         if media_group:
             await context.bot.send_media_group(chat_id=user[1], media=media_group)
         
-        # إذا كان هناك صفحات إضافية
         if end_page - current_page >= 10:
             for page_num in range(current_page + 10, end_page + 1):
                 image_path = MediaManager.get_quran_page_image(page_num)
@@ -713,9 +769,7 @@ async def send_daily_wird_single(context: ContextTypes.DEFAULT_TYPE, user_id: in
                         await context.bot.send_photo(chat_id=user[1], photo=photo)
                     await asyncio.sleep(0.3)
         
-        next_page = end_page + 1
-        if next_page > QURAN_PAGES:
-            next_page = 1
+        next_page = end_page + 1 if end_page < QURAN_PAGES else 1
         db.update_current_page(user[0], next_page)
     except:
         pass
@@ -723,17 +777,16 @@ async def send_daily_wird_single(context: ContextTypes.DEFAULT_TYPE, user_id: in
 async def send_mulk(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users()
     image_path = MediaManager.get_mulk_image()
-    caption = "🌙 *سورة الملك*\n\n أن النبيَّ صلَّى اللهُ عليهِ وسلَّمَ كان لا ينامُ حتى يقرأَ الم تنزيلُ و تباركَ الذي بيدِه الملكُ "
     
     for user in users:
-        mulk_enabled = user[9] if len(user) > 9 else 1
+        mulk_enabled = user[7] if len(user) > 7 else 1
         if mulk_enabled:
             try:
                 if image_path:
                     with open(image_path, 'rb') as photo:
-                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=caption, parse_mode='Markdown')
+                        await context.bot.send_photo(chat_id=user[1], photo=photo, caption=IslamicContent.MULK_REMINDER, parse_mode='Markdown')
                 else:
-                    await context.bot.send_message(chat_id=user[1], text=caption, parse_mode='Markdown')
+                    await context.bot.send_message(chat_id=user[1], text=IslamicContent.MULK_REMINDER, parse_mode='Markdown')
             except:
                 pass
 
@@ -741,30 +794,23 @@ async def send_friday_kahf(context: ContextTypes.DEFAULT_TYPE):
     if datetime.now().weekday() == 4:
         users = db.get_all_users()
         pdf_path = MediaManager.get_kahf_pdf()
-        caption = "🕌 *جمعة مباركة*\n\n📖 سورة الكهف\n\n💚 الصلاة على النبي ﷺ"
         
         for user in users:
-            kahf_enabled = user[8] if len(user) > 8 else 1
+            kahf_enabled = user[6] if len(user) > 6 else 1
             if kahf_enabled:
                 try:
                     if pdf_path:
                         with open(pdf_path, 'rb') as document:
-                            await context.bot.send_document(chat_id=user[1], document=document, caption=caption, parse_mode='Markdown', filename="سورة_الكهف.pdf")
+                            await context.bot.send_document(chat_id=user[1], document=document, caption=IslamicContent.KAHF_FRIDAY, parse_mode='Markdown', filename="سورة_الكهف.pdf")
                     else:
-                        await context.bot.send_message(chat_id=user[1], text=caption, parse_mode='Markdown')
+                        await context.bot.send_message(chat_id=user[1], text=IslamicContent.KAHF_FRIDAY, parse_mode='Markdown')
                 except:
                     pass
 
 async def send_bakarah_part(context: ContextTypes.DEFAULT_TYPE, prayer_name: str):
     users = db.get_all_users()
     
-    parts = {
-        'Fajr': (1, 3),
-        'Dhuhr': (4, 6),
-        'Asr': (7, 9),
-        'Maghrib': (10, 10),
-        'Isha': (11, 12)
-    }
+    parts = {'Fajr': (1, 3), 'Dhuhr': (4, 6), 'Asr': (7, 9), 'Maghrib': (10, 10), 'Isha': (11, 12)}
     
     if prayer_name not in parts:
         return
@@ -773,7 +819,13 @@ async def send_bakarah_part(context: ContextTypes.DEFAULT_TYPE, prayer_name: str
     images = MediaManager.get_bakarah_qiyam_images(start_page, end_page)
     
     prayers_ar = {'Fajr': 'الفجر', 'Dhuhr': 'الظهر', 'Asr': 'العصر', 'Maghrib': 'المغرب', 'Isha': 'العشاء'}
-    caption = f"📗 *سورة البقرة*\n\nبعد {prayers_ar[prayer_name]}\nصفحات {start_page}-{end_page}"
+    caption = f"""📗 *سورة البقرة - مصحف القيام*
+
+بعد صلاة {prayers_ar[prayer_name]}
+
+﴿وَإِذَا سَأَلَكَ عِبَادِي عَنِّي فَإِنِّي قَرِيبٌ ۖ أُجِيبُ دَعْوَةَ الدَّاعِ إِذَا دَعَانِ﴾
+
+صفحات {start_page}-{end_page}"""
     
     for user in users:
         bakarah_enabled = user[3] if len(user) > 3 else 0
@@ -800,7 +852,7 @@ async def check_islamic_occasions_daily(context: ContextTypes.DEFAULT_TYPE):
         hijri = IslamicCalendar.get_hijri_date()
         
         if hijri:
-            message = f"🌙 *مناسبة*\n\n📅 {hijri['day']} {hijri['month_name']}\n\n{occasion}"
+            message = f"🌙 *مناسبة إسلامية*\n\n📅 {hijri['day']} {hijri['month_name']} {hijri['year']}هـ\n\n{occasion}"
             for user in users:
                 try:
                     await context.bot.send_message(chat_id=user[1], text=message, parse_mode='Markdown')
@@ -813,10 +865,19 @@ async def send_white_days_reminder(context: ContextTypes.DEFAULT_TYPE):
         hijri = IslamicCalendar.get_hijri_date()
         
         if hijri:
-            message = f"⚪ *الأيام البيض*\n\nغدًا صيام الأيام البيض\n يوم 13 و14 و15 "
+            message = f"""⚪ *تذكير: الأيام البيض*
+
+غدًا يبدأ صيام الأيام البيض من شهر {hijri['month_name']}
+
+الأيام: 13، 14، 15
+
+عن أبي ذر رضي الله عنه: أمرنا رسول الله ﷺ أن نصوم من الشهر ثلاثة أيام البيض: ثلاث عشرة وأربع عشرة وخمس عشرة
+
+🤲 بارك الله في صيامك"""
+            
             for user in users:
-                white_days_enabled = user[12] if len(user) > 12 else 1
-                if white_days_enabled:
+                white_enabled = user[10] if len(user) > 10 else 1
+                if white_enabled:
                     try:
                         await context.bot.send_message(chat_id=user[1], text=message, parse_mode='Markdown')
                     except:
@@ -834,17 +895,24 @@ async def send_random_dhikr(context: ContextTypes.DEFAULT_TYPE):
 
 async def send_qiyam_reminder(context: ContextTypes.DEFAULT_TYPE):
     users = db.get_all_users()
-    message = "🌙 *قيام الليل*\n\nالثلث الأخير من الليل \n\n قيام الليل له فضل عظيم، فهو وسيلة للقرب من الله، ومكفر للذنوب، ومنهاة عن الإثم، كما أنه يقرب العبد من ربه ويجعله من القانتين، بالإضافة إلى أنه وقت لإجابة الدعاء وتفريج الهموم، ويفتح أبواب الخير والبركة 🍃"
     
     for user in users:
         try:
-            await context.bot.send_message(chat_id=user[1], text=message, parse_mode='Markdown')
+            await context.bot.send_message(chat_id=user[1], text=IslamicContent.QIYAM_REMINDER, parse_mode='Markdown')
         except:
             pass
 
-# ======================== جدولة ========================
+# ======================== الجدولة ========================
 async def schedule_bakarah_prayers(application):
-    prayer_times = IslamicCalendar.get_prayer_times()
+    users = db.get_all_users()
+    if not users:
+        return
+    
+    user = users[0]
+    city = user[11] if len(user) > 11 else 'Makkah'
+    country = user[12] if len(user) > 12 else 'Saudi Arabia'
+    
+    prayer_times = IslamicCalendar.get_prayer_times(city, country)
     
     if not prayer_times:
         prayer_times = {'Fajr': '05:00', 'Dhuhr': '12:30', 'Asr': '15:45', 'Maghrib': '18:15', 'Isha': '19:45'}
@@ -872,7 +940,7 @@ async def schedule_user_quran_times(application):
     
     for user in users:
         user_id = user[0]
-        quran_time = user[10] if len(user) > 10 else '09:00'
+        quran_time = user[8] if len(user) > 8 else '09:00'
         
         try:
             time_obj = datetime.strptime(quran_time, '%H:%M').time()
@@ -888,66 +956,50 @@ def setup_jobs(application):
     job_queue = application.job_queue
     
     if job_queue is None:
-        logger.error("❌ JobQueue غير متاح")
         return
     
-    job_queue.run_daily(send_morning_azkar, time=datetime.strptime('06:00', '%H:%M').time(), name='morning_azkar')
-    job_queue.run_daily(send_evening_azkar, time=datetime.strptime('17:00', '%H:%M').time(), name='evening_azkar')
-    job_queue.run_daily(send_mulk, time=datetime.strptime('22:00', '%H:%M').time(), name='mulk')
-    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('12:00', '%H:%M').time(), name='friday_kahf')
-    job_queue.run_daily(check_islamic_occasions_daily, time=datetime.strptime('07:00', '%H:%M').time(), name='occasions')
-    job_queue.run_daily(send_white_days_reminder, time=datetime.strptime('20:00', '%H:%M').time(), name='white_days')
-    job_queue.run_daily(send_qiyam_reminder, time=datetime.strptime('02:00', '%H:%M').time(), name='qiyam')
+    job_queue.run_daily(send_morning_azkar, time=datetime.strptime('06:00', '%H:%M').time())
+    job_queue.run_daily(send_evening_azkar, time=datetime.strptime('17:00', '%H:%M').time())
+    job_queue.run_daily(send_mulk, time=datetime.strptime('22:00', '%H:%M').time())
+    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('08:00', '%H:%M').time())
+    job_queue.run_daily(check_islamic_occasions_daily, time=datetime.strptime('07:00', '%H:%M').time())
+    job_queue.run_daily(send_white_days_reminder, time=datetime.strptime('20:00', '%H:%M').time())
+    job_queue.run_daily(send_qiyam_reminder, time=datetime.strptime('02:00', '%H:%M').time())
     
-    random_time_1 = datetime.strptime(f'{random.randint(10, 11)}:{random.randint(0, 59):02d}', '%H:%M').time()
-    job_queue.run_daily(send_random_dhikr, time=random_time_1, name='random_dhikr_1')
-    
-    random_time_2 = datetime.strptime(f'{random.randint(15, 16)}:{random.randint(0, 59):02d}', '%H:%M').time()
-    job_queue.run_daily(send_random_dhikr, time=random_time_2, name='random_dhikr_2')
-    
-    logger.info("✅ تم إعداد المهام")
+    job_queue.run_daily(send_random_dhikr, time=datetime.strptime(f'{random.randint(10, 11)}:{random.randint(0, 59):02d}', '%H:%M').time())
+    job_queue.run_daily(send_random_dhikr, time=datetime.strptime(f'{random.randint(15, 16)}:{random.randint(0, 59):02d}', '%H:%M').time())
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-ℹ️ *وِرْدُ المُسْلِم*
+    await update.message.reply_text("""ℹ️ *وِرْدُ المُسْلِم*
 
 /start - البدء
 
-*المميزات:*
-📖 الورد اليومي (وقت مخصص)
-📗 سورة البقرة (12 صفحة)
-☀️ أذكار الصباح والمساء
-🌙 سورة الملك
-🕋 سورة الكهف (الجمعة)
-⚪ الأيام البيض
-📅 المناسبات الإسلامية
-🤲 أذكار متنوعة
+📖 الورد اليومي
+📗 سورة البقرة
+☀️ أذكار
+🕋 سورة الكهف
+📅 المناسبات
 
-*للمجموعات والقنوات:*
-أضف البوت وسيعمل تلقائياً
-
-🤲 بارك الله فيك
-    """
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+🤲 بارك الله فيك""", parse_mode='Markdown')
 
 def main():
     print("=" * 60)
-    print("🕌 وِرْدُ المُسْلِم ")
+    print("🕌 وِرْدُ المُسْلِم")
     print("=" * 60)
     
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("\n❌ ضع التوكن في BOT_TOKEN")
+        print("\n❌ ضع التوكن")
         return
     
+    application = Application.builder().token(BOT_TOKEN).build()
     
-    try:
-        application = Application.builder().token(BOT_TOKEN).build()
-    except Exception as e:
-        print(f"\n❌ خطأ: {e}")
-        return
-
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={SELECTING_CITY: [CallbackQueryHandler(city_selected, pattern=r'^city_\d+') ]},
+        fallbacks=[CommandHandler('start', start)],
+    )
     
-    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler)
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(ChatMemberHandler(track_bot_added, ChatMemberHandler.MY_CHAT_MEMBER))
@@ -956,17 +1008,18 @@ def main():
     setup_jobs(application)
     
     print("\n🚀 البوت يعمل")
-    print("✨ جاهز")
     print("=" * 60 + "\n")
     
-    
-    try:
+    # لـ Render - استخدام webhook
+    if os.environ.get("RENDER"):
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"https://your-app.onrender.com/{BOT_TOKEN}"
+        )
+    else:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except KeyboardInterrupt:
-        print("\n🛑 توقف")
-    except Exception as e:
-        print(f"\n❌ {e}")
-
 
 if __name__ == '__main__':
     main()
