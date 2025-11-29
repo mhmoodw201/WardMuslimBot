@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # استخدام متغير بيئة للتوكن (مهم لـ Render)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI")
 PORT = int(os.environ.get("PORT", 8443))
 
 QURAN_PAGES = 604
