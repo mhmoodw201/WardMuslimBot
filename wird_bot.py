@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # استخدام متغير بيئة للتوكن (مهم لـ Render)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8428357636:AAFmd0_OnbvQpA0w2UcgTCekf5ends2DkBI")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 PORT = int(os.environ.get("PORT", 8443))
 
 QURAN_PAGES = 604
@@ -203,15 +203,15 @@ class IslamicCalendar:
         occasions = {
             (1, 1): "🌙 رأس السنة الهجرية",
             (1, 10): "🕌 يوم عاشوراء\n\nعن ابن عباس رضي الله عنهما: \"ما رأيت النبي ﷺ يتحرى صيام يوم فضله على غيره إلا هذا اليوم، يوم عاشوراء\"",
-            (9, 1): "🌙 أول يوم رمضان\n\n﴿شَهْرُ رَمَضَانَ الَّذِي أُنزِلَ فِيهِ الْقُرْآنُ﴾",
-            (9, 27): "🌙 ليلة القدر\n\n﴿لَيْلَةُ الْقَدْرِ خَيْرٌ مِّنْ أَلْفِ شَهْرٍ﴾",
-            (10, 1): "🎉 أول يوم من عيد الفطر المبارك\n\nتقبل الله منا ومنكم",
+            (9, 1): "🌙 رمضان كريم\n\n﴿شَهْرُ رَمَضَانَ الَّذِي أُنزِلَ فِيهِ الْقُرْآنُ﴾",
+            (9, 27): "⭐ ليلة القدر\n\n﴿لَيْلَةُ الْقَدْرِ خَيْرٌ مِّنْ أَلْفِ شَهْرٍ﴾",
+            (10, 1): "🎉 عيد الفطر المبارك\n\nتقبل الله منا ومنكم",
             (10, 9): "🕋 يوم عرفة\n\nعن النبي ﷺ: \"ما من يوم أكثر من أن يعتق الله فيه عبدًا من النار من يوم عرفة\"",
-            (10, 10): "🎊 عيد الأضحى\n\n كل عام وأنتم بخير، تقبل الله طاعتكم"
+            (10, 10): "🎊 عيد الأضحى\n\nكل عام أنتم بخير يارب "
         }
         
         if day in [13, 14, 15]:
-            return f"⚪ الأيام البيض ({day} {hijri['month_name']})\n\nعنْ أَبي ذَرٍّ رضي الله عنه، قَالَ: قالَ رسولُ اللَّهِ ﷺ: ( إِذا صُمْتَ مِنَ الشَّهْرِ ثَلاثًا، فَصُمْ ثَلاثَ عَشْرَةَ، وَأَرْبعَ عَشْرَةَ، وخَمْسَ عَشْرَةَ ) رواه الترمِذيُّ "
+            return f"⚪ الأيام البيض ({day} {hijri['month_name']})\n\nعن أبي ذر رضي الله عنه قال: أمرنا رسول الله ﷺ أن نصوم من الشهر ثلاثة أيام: البيض، ثلاث عشرة وأربع عشرة وخمس عشرة"
         
         return occasions.get((month, day))
     
@@ -512,7 +512,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • الورد اليومي
 • أذكار الصباح والمساء
 • سورة الكهف (الجمعة)
-•  المناسبات الإسلامية
+• المناسبات الإسلامية
 
 🕌 بارك الله فيكم
         """
@@ -661,7 +661,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = db.get_user(user_id)
         if user:
             pages = user[2] if len(user) > 2 else 2
-            quran_time = user[8] if len(user) > 8 else '13:00'
+            quran_time = user[8] if len(user) > 8 else '09:00'
             await query.edit_message_text(f"📖 *وردك*\n\nالصفحات: {pages}\nالوقت: {quran_time}", parse_mode='Markdown')
     elif data == 'quick_azkar':
         keyboard = [
@@ -958,7 +958,7 @@ def setup_jobs(application):
     job_queue.run_daily(send_morning_azkar, time=datetime.strptime('06:00', '%H:%M').time())
     job_queue.run_daily(send_evening_azkar, time=datetime.strptime('17:00', '%H:%M').time())
     job_queue.run_daily(send_mulk, time=datetime.strptime('22:00', '%H:%M').time())
-    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('10:00', '%H:%M').time())
+    job_queue.run_daily(send_friday_kahf, time=datetime.strptime('08:00', '%H:%M').time())
     job_queue.run_daily(check_islamic_occasions_daily, time=datetime.strptime('07:00', '%H:%M').time())
     job_queue.run_daily(send_white_days_reminder, time=datetime.strptime('20:00', '%H:%M').time())
     job_queue.run_daily(send_qiyam_reminder, time=datetime.strptime('02:00', '%H:%M').time())
@@ -973,9 +973,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📖 الورد اليومي
 📗 سورة البقرة
-☀️ أذكار واستغفار
+☀️ أذكار والاستغفار
 🕋 سورة الكهف
-📅 المناسبات
+📅 المناسبات الاسلامية
 
 🤲 بارك الله فيك""", parse_mode='Markdown')
 
@@ -992,7 +992,7 @@ def main():
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
-        states={SELECTING_CITY: [CallbackQueryHandler(city_selected, pattern=r'^city_\d+') ]},
+        states={SELECTING_CITY: [CallbackQueryHandler(city_selected, pattern=r'^city_\d+$')]},
         fallbacks=[CommandHandler('start', start)],
     )
     
